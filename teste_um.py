@@ -224,7 +224,7 @@ class InterfaceMapa:
     def __init__(self, root, motor):
         self.root = root
         self.motor = motor
-        self.root.title("Roteador OSMnx - A* e Dijkstra")
+        self.root.title("Rastreador de Rotas - A* e Dijkstra")
         self.root.geometry("1400x800")
         
         self.modo_atual = None  
@@ -517,3 +517,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = InterfaceMapa(root, motor)
     root.mainloop()
+
