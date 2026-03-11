@@ -233,6 +233,11 @@ class InterfaceMapa:
         self.ponto_edicao = None  
         self.animar_var = tk.BooleanVar(value=False)
         
+        # Variáveis para o comparativo
+        self.ultima_origem = None
+        self.ultimo_destino = None
+        self.ultimo_algoritmo = None
+        
         self.criar_layout()
         self.desenhar_mapa_base()
 
@@ -246,6 +251,10 @@ class InterfaceMapa:
         # Botões de Rota (Dijkstra e A*)
         tk.Button(self.frame_menu, text="📍 Rota Dijkstra", font=("Arial", 11, "bold"), bg="#27ae60", fg="white", command=lambda: self.ativar_rota('DIJKSTRA')).pack(fill=tk.X, padx=20, pady=2)
         tk.Button(self.frame_menu, text="📍 Rota A*", font=("Arial", 11, "bold"), bg="#2980b9", fg="white", command=lambda: self.ativar_rota('A_STAR')).pack(fill=tk.X, padx=20, pady=2)
+        
+        # Botão de Comparativo
+        self.btn_comparar = tk.Button(self.frame_menu, text="⚖️ Comparar Modelos", font=("Arial", 11, "bold"), bg="#8e44ad", fg="white", state=tk.DISABLED, command=self.abrir_comparacao)
+        self.btn_comparar.pack(fill=tk.X, padx=20, pady=10)
         
         tk.Checkbutton(self.frame_menu, text="Animar busca", variable=self.animar_var, bg="#2c3e50", fg="white", selectcolor="#34495e").pack(pady=5)
 
@@ -418,7 +427,6 @@ class InterfaceMapa:
                 self.root.update()
                 time.sleep(0.01)
         
-        #  show=False, close=False para evitar a segunda janela!
         ox.plot_graph_route(self.motor.G, caminho, ax=self.ax, route_color='#00AA55', route_linewidth=4, node_size=0, show=False, close=False)
         self.canvas.draw()
 
@@ -428,8 +436,68 @@ class InterfaceMapa:
         self.log(f"Tempo: {stats['tempo_min']:.1f} min")
         self.log(f"Semáforos: {stats['semaforos']} | Lombadas: {stats['lombadas']}")
         
+        # Salva dados e habilita o botão de comparação
+        self.ultima_origem = self.origem
+        self.ultimo_destino = self.destino
+        self.ultimo_algoritmo = algoritmo
+        self.btn_comparar.config(state=tk.NORMAL)
+        
         self.modo_atual = None
         self.lbl_status.config(text="✅ Rota concluída.")
+
+    def abrir_comparacao(self):
+        if not self.ultima_origem or not self.ultimo_destino: return
+
+        # Descobre qual é o outro algoritmo
+        outro_algoritmo = 'A_STAR' if self.ultimo_algoritmo == 'DIJKSTRA' else 'DIJKSTRA'
+        self.lbl_status.config(text=f"⚖️ Gerando comparativo com {outro_algoritmo}...")
+        self.root.update()
+
+        # Executa o algoritmo comparativo e refaz o original para pegar os visitados
+        inicio_t = time.time()
+        if outro_algoritmo == 'DIJKSTRA':
+            caminho_outro, visitados_outro = self.motor.dijkstra(self.ultima_origem, self.ultimo_destino)
+            caminho_orig, visitados_orig = self.motor.a_star(self.ultima_origem, self.ultimo_destino)
+        else:
+            caminho_outro, visitados_outro = self.motor.a_star(self.ultima_origem, self.ultimo_destino)
+            caminho_orig, visitados_orig = self.motor.dijkstra(self.ultima_origem, self.ultimo_destino)
+            
+        tempo_exec_outro = time.time() - inicio_t
+
+        if not caminho_outro:
+            self.log("❌ Rota não encontrada para o modelo comparativo.")
+            self.lbl_status.config(text="Erro no comparativo.")
+            return
+
+        # Log no terminal
+        self.log(f"\n--- COMPARAÇÃO: {outro_algoritmo} ({tempo_exec_outro:.2f}s) ---")
+        self.log(f"Nós explorados na busca: {len(visitados_outro)}")
+
+        # Cria a nova janela Toplevel
+        janela_comp = tk.Toplevel(self.root)
+        janela_comp.title(f"Comparativo: {self.ultimo_algoritmo} vs {outro_algoritmo}")
+        janela_comp.geometry("1200x600")
+
+        fig_comp, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+        fig_comp.patch.set_facecolor('#FFFFFF')
+
+        # Plota os mapas base 
+        ox.plot_graph(self.motor.G, ax=ax1, show=False, close=False, node_size=0, edge_color='#AAAAAA', edge_alpha=0.4, bgcolor='#FFFFFF')
+        ox.plot_graph(self.motor.G, ax=ax2, show=False, close=False, node_size=0, edge_color='#AAAAAA', edge_alpha=0.4, bgcolor='#FFFFFF')
+
+        # Plota as duas rotas
+        ox.plot_graph_route(self.motor.G, caminho_orig, ax=ax1, route_color='#27ae60', route_linewidth=3, node_size=0, show=False, close=False)
+        ax1.set_title(f"Original: {self.ultimo_algoritmo}\nNós explorados: {len(visitados_orig)}", fontsize=12)
+
+        ox.plot_graph_route(self.motor.G, caminho_outro, ax=ax2, route_color='#2980b9', route_linewidth=3, node_size=0, show=False, close=False)
+        ax2.set_title(f"Comparativo: {outro_algoritmo}\nNós explorados: {len(visitados_outro)}", fontsize=12)
+
+        # Renderiza no Tkinter
+        canvas_comp = FigureCanvasTkAgg(fig_comp, master=janela_comp)
+        canvas_comp.draw()
+        canvas_comp.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        self.lbl_status.config(text="✅ Comparativo gerado com sucesso.")
 
     def limpar_tudo(self):
         if messagebox.askyesno("Confirmar", "Apagar TODAS as edições?"):
