@@ -512,13 +512,22 @@ def exibir_mapa_com_painel(caminho, visitados, tempo_execucao, animar=False,
 
 def comparar_astar_dijkstra_animado(origem, destino):
     """
-    Executa A* e Dijkstra em paralelo (frame a frame) sobre o mesmo grafo
-    e exibe os dois mapas lado a lado com animação e painel de estatísticas.
+    Três fases de animação lado a lado:
 
-    Layout:
-    ┌──────────────┬──────────────┬──────────────┐
-    │   A* (mapa)  │ Dijkstra(map)│  Stats panel │
-    └──────────────┴──────────────┴──────────────┘
+      FASE 1 — EXPLORAÇÃO
+        Nós visitados crescem frame a frame em ambos os mapas
+        (pontos amarelos no A*, azuis no Dijkstra).
+
+      FASE 2 — REVELAÇÃO DA ROTA (nó a nó)
+        As arestas da rota são desenhadas segmento a segmento,
+        simultaneamente nos dois mapas, com um ponto "cursor"
+        que avança pela rota. Velocidade proporcional ao número
+        de nós de cada rota para que terminem juntos.
+
+      FASE 3 — ESTADO FINAL
+        Rotas completas destacadas, exploração esmaecida,
+        marcadores de origem/destino redesenhados por cima,
+        painel de stats atualizado com resultado final.
     """
 
     # ── 7a. Executa os dois algoritmos e mede tempo ──────────────────────────
@@ -532,8 +541,8 @@ def comparar_astar_dijkstra_animado(origem, destino):
     caminho_dijkstra, visitados_dijkstra = dijkstra_animado(origem, destino)
     tempo_dijkstra = time.time() - t0
 
-    stats_astar    = calcular_estatisticas_dict(caminho_astar)
-    stats_dijkstra = calcular_estatisticas_dict(caminho_dijkstra)
+    stats_astar     = calcular_estatisticas_dict(caminho_astar)
+    stats_dijkstra  = calcular_estatisticas_dict(caminho_dijkstra)
     rotas_identicas = caminho_astar == caminho_dijkstra
 
     # ── 7b. Monta a figura ───────────────────────────────────────────────────
@@ -552,79 +561,102 @@ def comparar_astar_dijkstra_animado(origem, destino):
     ax_dijkstra = fig.add_subplot(gs[1])
     ax_stats    = fig.add_subplot(gs[2])
 
-    # ── 7c. Desenha o grafo base nos dois mapas ──────────────────────────────
-    for ax, titulo_base, cor_titulo in [
-        (ax_astar,    "⚡ A*  (Heurístico)", '#FFD700'),
+    # ── 7c. Grafo base ───────────────────────────────────────────────────────
+    for ax, titulo, cor in [
+        (ax_astar,    "⚡ A*  (Heurístico)",     '#FFD700'),
         (ax_dijkstra, "🔵 Dijkstra (Exaustivo)", '#00BFFF'),
     ]:
         ox.plot_graph(G, ax=ax, show=False, close=False,
                       node_size=0, edge_color='#3a3a3a',
                       edge_alpha=0.6, bgcolor='#111111')
-        ax.set_title(titulo_base, color=cor_titulo, fontsize=13,
-                     fontweight='bold', pad=6)
+        ax.set_title(titulo, color=cor, fontsize=13, fontweight='bold', pad=6)
 
-    # Painel de estatísticas
     ax_stats.set_facecolor('#111111')
     ax_stats.axis('off')
     fig.text(0.845, 0.965, "COMPARAÇÃO A* vs DIJKSTRA",
              color='white', fontsize=12, fontweight='bold',
              ha='center', va='top', family='monospace')
 
-    # ── 7d. Helpers de animação ──────────────────────────────────────────────
+    # ── 7d. Paleta de cores ───────────────────────────────────────────────────
     CORES = {
-        'astar_explore':    '#FFD700',   # amarelo ouro — exploração A*
-        'dijkstra_explore': '#00BFFF',   # azul claro — exploração Dijkstra
-        'astar_rota':       '#FF4500',   # laranja-vermelho — rota A*
-        'dijkstra_rota':    '#00FF7F',   # verde primavera — rota Dijkstra
+        'astar_explore':    '#FFD700',
+        'dijkstra_explore': '#00BFFF',
+        'astar_rota':       '#FF4500',
+        'dijkstra_rota':    '#00FF7F',
         'origem':           '#FFFFFF',
         'destino':          '#FF00FF',
+        'cursor_a':         '#FFAA00',
+        'cursor_d':         '#00DDFF',
     }
 
+    # ── 7e. Objetos de animação ───────────────────────────────────────────────
+
+    # Fase 1 — nuvens de exploração
     scat_a = ax_astar.scatter([], [], c=CORES['astar_explore'],
-                               s=12, zorder=4, alpha=0.7)
+                               s=10, zorder=4, alpha=0.55)
     scat_d = ax_dijkstra.scatter([], [], c=CORES['dijkstra_explore'],
-                                  s=12, zorder=4, alpha=0.7)
+                                  s=10, zorder=4, alpha=0.55)
 
-    # Marcadores de origem/destino
-    for ax in (ax_astar, ax_dijkstra):
-        ox_lon, ox_lat = G.nodes[origem]['x'],  G.nodes[origem]['y']
-        dx_lon, dx_lat = G.nodes[destino]['x'], G.nodes[destino]['y']
-        ax.scatter([ox_lon], [ox_lat], c=CORES['origem'],  s=180,
-                   marker='o', edgecolors='black', linewidths=2, zorder=9)
-        ax.scatter([dx_lon], [dx_lat], c=CORES['destino'], s=220,
-                   marker='*', edgecolors='black', linewidths=2, zorder=9)
+    # Fase 2 — segmentos da rota revelados progressivamente (Line2D acumulativo)
+    linha_rota_a, = ax_astar.plot([], [], color=CORES['astar_rota'],
+                                   linewidth=4, zorder=6, solid_capstyle='round')
+    linha_rota_d, = ax_dijkstra.plot([], [], color=CORES['dijkstra_rota'],
+                                      linewidth=4, zorder=6, solid_capstyle='round')
 
-    # Textos de progresso
+    # Fase 2 — cursor (ponto que avança na frente da linha)
+    cursor_a = ax_astar.scatter([], [], c=CORES['cursor_a'],
+                                 s=80, zorder=8, edgecolors='white', linewidths=1.2)
+    cursor_d = ax_dijkstra.scatter([], [], c=CORES['cursor_d'],
+                                    s=80, zorder=8, edgecolors='white', linewidths=1.2)
+
+    # Marcadores de origem / destino (criados agora, redesenhados na fase 3)
+    def _desenhar_pins(alpha=1.0):
+        for ax in (ax_astar, ax_dijkstra):
+            ax.scatter([G.nodes[origem]['x']],  [G.nodes[origem]['y']],
+                       c=CORES['origem'],  s=180, marker='o',
+                       edgecolors='black', linewidths=2, zorder=10, alpha=alpha)
+            ax.scatter([G.nodes[destino]['x']], [G.nodes[destino]['y']],
+                       c=CORES['destino'], s=220, marker='*',
+                       edgecolors='black', linewidths=2, zorder=10, alpha=alpha)
+
+    _desenhar_pins()
+
+    # Texto de progresso em cada mapa
     txt_a = ax_astar.text(
         0.02, 0.04, "", transform=ax_astar.transAxes,
-        color=CORES['astar_explore'], fontsize=10, family='monospace',
+        color=CORES['astar_explore'], fontsize=10, family='monospace', zorder=11,
         bbox=dict(boxstyle='round,pad=0.3', facecolor='#1a1a1a',
                   edgecolor=CORES['astar_explore'], alpha=0.85)
     )
     txt_d = ax_dijkstra.text(
         0.02, 0.04, "", transform=ax_dijkstra.transAxes,
-        color=CORES['dijkstra_explore'], fontsize=10, family='monospace',
+        color=CORES['dijkstra_explore'], fontsize=10, family='monospace', zorder=11,
         bbox=dict(boxstyle='round,pad=0.3', facecolor='#1a1a1a',
                   edgecolor=CORES['dijkstra_explore'], alpha=0.85)
     )
 
-    # Painel lateral — texto vazio que será atualizado
     txt_stats = ax_stats.text(
         0.05, 0.97, "", transform=ax_stats.transAxes,
         color='white', fontsize=10, va='top', ha='left',
         family='monospace', linespacing=1.5
     )
 
-    def _atualizar_painel(fase='explorando', pct_a=0, pct_d=0):
-        """Atualiza o painel lateral de estatísticas."""
-        vencedor_nos = "⚡ A*" if len(visitados_astar) < len(visitados_dijkstra) else "🔵 Dijkstra"
-        vencedor_tempo = "⚡ A*" if tempo_astar < tempo_dijkstra else "🔵 Dijkstra"
-        eficiencia = (len(visitados_astar) / max(len(visitados_dijkstra), 1)) * 100
+    # ── 7f. Painel de estatísticas ────────────────────────────────────────────
+    def _atualizar_painel(fase='explorando', pct_a=0, pct_d=0, nos_rota_a=0, nos_rota_d=0):
+        vencedor_nos   = "⚡ A*"      if len(visitados_astar) < len(visitados_dijkstra) else "🔵 Dijkstra"
+        vencedor_tempo = "⚡ A*"      if tempo_astar < tempo_dijkstra                  else "🔵 Dijkstra"
+        eficiencia     = len(visitados_astar) / max(len(visitados_dijkstra), 1) * 100
 
         if fase == 'explorando':
-            status = f"🔄 EXPLORANDO...\n   A*:       {pct_a:3.0f}%\n   Dijkstra: {pct_d:3.0f}%\n"
+            status = (f"🔍 FASE 1 — EXPLORAÇÃO\n"
+                      f"   A*:       {pct_a:3.0f}%\n"
+                      f"   Dijkstra: {pct_d:3.0f}%\n")
+        elif fase == 'rota':
+            status = (f"🛤️  FASE 2 — TRAÇANDO ROTA\n"
+                      f"   A*:       {nos_rota_a}/{len(caminho_astar)} nós\n"
+                      f"   Dijkstra: {nos_rota_d}/{len(caminho_dijkstra)} nós\n")
         else:
-            status = "✅ CONCLUÍDO\n"
+            status = "✅ FASE 3 — CONCLUÍDO\n"
 
         linhas = [
             status,
@@ -658,31 +690,31 @@ def comparar_astar_dijkstra_animado(origem, destino):
 
         if fase == 'concluido':
             if rotas_identicas:
-                linhas.append("📌 ROTAS IDÊNTICAS")
-                linhas.append("   Ambos encontraram")
-                linhas.append("   o mesmo caminho.")
+                linhas += ["📌 ROTAS IDÊNTICAS",
+                           "   Ambos encontraram",
+                           "   o mesmo caminho."]
             else:
-                diff_dist  = stats_astar['distancia_km'] - stats_dijkstra['distancia_km']
-                diff_tempo = stats_astar['tempo_min']    - stats_dijkstra['tempo_min']
-                sinal_d    = "+" if diff_dist  >= 0 else ""
-                sinal_t    = "+" if diff_tempo >= 0 else ""
-                linhas.append("📊 DIFERENÇA A* vs Dijk")
-                linhas.append(f"   Dist:  {sinal_d}{diff_dist:.3f} km")
-                linhas.append(f"   Tempo: {sinal_t}{diff_tempo:.2f} min")
+                dd = stats_astar['distancia_km'] - stats_dijkstra['distancia_km']
+                dt = stats_astar['tempo_min']    - stats_dijkstra['tempo_min']
+                linhas += [
+                    "📊 DIFERENÇA A* vs Dijk",
+                    f"   Dist:  {'+' if dd>=0 else ''}{dd:.3f} km",
+                    f"   Tempo: {'+' if dt>=0 else ''}{dt:.2f} min",
+                ]
 
         txt_stats.set_text("\n".join(linhas))
         fig.canvas.draw_idle()
 
-    # ── 7e. Loop de animação ─────────────────────────────────────────────────
+    # ── FASE 1: Exploração ───────────────────────────────────────────────────
     coords_a = [(G.nodes[n]['x'], G.nodes[n]['y']) for n in visitados_astar]
     coords_d = [(G.nodes[n]['x'], G.nodes[n]['y']) for n in visitados_dijkstra]
 
-    FRAMES_ANIM = 80                              # número de frames da animação
-    passo_a = max(1, len(coords_a) // FRAMES_ANIM)
-    passo_d = max(1, len(coords_d) // FRAMES_ANIM)
+    FRAMES_EXP = 80
+    passo_a = max(1, len(coords_a) // FRAMES_EXP)
+    passo_d = max(1, len(coords_d) // FRAMES_EXP)
 
-    print("  🎬 Animando exploração...")
-    for frame in range(FRAMES_ANIM + 1):
+    print("  🎬 Fase 1 — Animando exploração...")
+    for frame in range(FRAMES_EXP + 1):
         idx_a = min(frame * passo_a, len(coords_a))
         idx_d = min(frame * passo_d, len(coords_d))
 
@@ -698,87 +730,121 @@ def comparar_astar_dijkstra_animado(origem, destino):
         _atualizar_painel('explorando', pct_a, pct_d)
         plt.pause(0.04)
 
-    # ── 7f. Desenha as rotas finais ──────────────────────────────────────────
-    print("  🗺️  Desenhando rotas finais...")
+    # ── FASE 2: Revelação da rota nó a nó ────────────────────────────────────
+    # Esmaece a nuvem de exploração para a rota ganhar destaque
+    scat_a.set_alpha(0.18)
+    scat_d.set_alpha(0.18)
 
-    if rotas_identicas:
-        # Mesma rota — mostra nos dois mapas com a cor de cada algoritmo
-        ox.plot_graph_route(G, caminho_astar, ax=ax_astar,
-                            route_color=CORES['astar_rota'],
-                            route_linewidth=5, node_size=0)
-        ox.plot_graph_route(G, caminho_dijkstra, ax=ax_dijkstra,
-                            route_color=CORES['dijkstra_rota'],
-                            route_linewidth=5, node_size=0)
-        ax_astar.set_title("⚡ A*  — Rota encontrada ✅",
-                            color=CORES['astar_rota'], fontsize=13, fontweight='bold')
-        ax_dijkstra.set_title("🔵 Dijkstra — Rota encontrada ✅",
-                               color=CORES['dijkstra_rota'], fontsize=13, fontweight='bold')
-    else:
-        # Rotas diferentes — exibe cada uma no seu mapa
-        # No mapa do A*, mostra a rota Dijkstra como referência (mais fina/transparente)
-        ox.plot_graph_routes(
-            G, [caminho_dijkstra, caminho_astar],
-            route_colors=[CORES['dijkstra_rota'], CORES['astar_rota']],
-            route_linewidths=[3, 5],
-            route_alpha=[0.35, 1.0],
-            ax=ax_astar, node_size=0
+    # Pré-calcula listas de (x, y) para cada rota
+    rota_xy_a = [(G.nodes[n]['x'], G.nodes[n]['y']) for n in caminho_astar]
+    rota_xy_d = [(G.nodes[n]['x'], G.nodes[n]['y']) for n in caminho_dijkstra]
+
+    # Número de frames da fase 2 baseado na rota mais longa
+    FRAMES_ROTA = max(len(rota_xy_a), len(rota_xy_d), 40)
+
+    print("  🎬 Fase 2 — Revelando rotas nó a nó...")
+    for frame in range(FRAMES_ROTA + 1):
+        # Índice proporcional para cada rota (termina juntas)
+        idx_ra = min(int(frame * len(rota_xy_a) / FRAMES_ROTA), len(rota_xy_a))
+        idx_rd = min(int(frame * len(rota_xy_d) / FRAMES_ROTA), len(rota_xy_d))
+
+        # Linha acumulada até o nó atual
+        if idx_ra >= 2:
+            xs_a, ys_a = zip(*rota_xy_a[:idx_ra])
+            linha_rota_a.set_data(xs_a, ys_a)
+        if idx_rd >= 2:
+            xs_d, ys_d = zip(*rota_xy_d[:idx_rd])
+            linha_rota_d.set_data(xs_d, ys_d)
+
+        # Cursor no nó mais recente
+        if idx_ra >= 1:
+            cursor_a.set_offsets([rota_xy_a[idx_ra - 1]])
+        if idx_rd >= 1:
+            cursor_d.set_offsets([rota_xy_d[idx_rd - 1]])
+
+        txt_a.set_text(f"Rota: {idx_ra}/{len(rota_xy_a)} nós")
+        txt_d.set_text(f"Rota: {idx_rd}/{len(rota_xy_d)} nós")
+
+        _atualizar_painel('rota', nos_rota_a=idx_ra, nos_rota_d=idx_rd)
+        plt.pause(0.05)
+
+    # ── FASE 3: Estado final ──────────────────────────────────────────────────
+    print("  🗺️  Fase 3 — Estado final...")
+
+    # Remove o cursor (já temos a linha completa)
+    cursor_a.set_offsets([(0, 0)])
+    cursor_a.set_alpha(0)
+    cursor_d.set_offsets([(0, 0)])
+    cursor_d.set_alpha(0)
+
+    # Quando as rotas são diferentes, adiciona a rota do outro algoritmo
+    # como referência semitransparente em cada mapa
+    if not rotas_identicas:
+        ax_astar.plot(
+            [G.nodes[n]['x'] for n in caminho_dijkstra],
+            [G.nodes[n]['y'] for n in caminho_dijkstra],
+            color=CORES['dijkstra_rota'], linewidth=2.5,
+            alpha=0.35, zorder=5, solid_capstyle='round'
         )
-        # No mapa do Dijkstra, mostra a rota A* como referência
-        ox.plot_graph_routes(
-            G, [caminho_astar, caminho_dijkstra],
-            route_colors=[CORES['astar_rota'], CORES['dijkstra_rota']],
-            route_linewidths=[3, 5],
-            route_alpha=[0.35, 1.0],
-            ax=ax_dijkstra, node_size=0
+        ax_dijkstra.plot(
+            [G.nodes[n]['x'] for n in caminho_astar],
+            [G.nodes[n]['y'] for n in caminho_astar],
+            color=CORES['astar_rota'], linewidth=2.5,
+            alpha=0.35, zorder=5, solid_capstyle='round'
         )
 
         legend_a = [
             Line2D([0], [0], color=CORES['astar_rota'],    linewidth=4, label='A* (principal)'),
             Line2D([0], [0], color=CORES['dijkstra_rota'], linewidth=2,
-                   alpha=0.5, label='Dijkstra (ref.)'),
+                   alpha=0.45, label='Dijkstra (ref.)'),
         ]
         legend_d = [
             Line2D([0], [0], color=CORES['dijkstra_rota'], linewidth=4, label='Dijkstra (principal)'),
             Line2D([0], [0], color=CORES['astar_rota'],    linewidth=2,
-                   alpha=0.5, label='A* (ref.)'),
+                   alpha=0.45, label='A* (ref.)'),
         ]
         ax_astar.legend(handles=legend_a, loc='upper left',
                         facecolor='#1e1e1e', labelcolor='white', fontsize=9)
         ax_dijkstra.legend(handles=legend_d, loc='upper left',
                            facecolor='#1e1e1e', labelcolor='white', fontsize=9)
 
-        ax_astar.set_title("⚡ A*  — Rota encontrada ✅",
-                            color=CORES['astar_rota'], fontsize=13, fontweight='bold')
-        ax_dijkstra.set_title("🔵 Dijkstra — Rota encontrada ✅",
-                               color=CORES['dijkstra_rota'], fontsize=13, fontweight='bold')
+    # Títulos finais
+    ax_astar.set_title(
+        f"⚡ A* — {len(caminho_astar)} nós | {stats_astar['distancia_km']:.2f} km ✅",
+        color=CORES['astar_rota'], fontsize=12, fontweight='bold'
+    )
+    ax_dijkstra.set_title(
+        f"🔵 Dijkstra — {len(caminho_dijkstra)} nós | {stats_dijkstra['distancia_km']:.2f} km ✅",
+        color=CORES['dijkstra_rota'], fontsize=12, fontweight='bold'
+    )
 
-    # Re-desenha origem/destino por cima das rotas
-    for ax in (ax_astar, ax_dijkstra):
-        ax.scatter([G.nodes[origem]['x']],  [G.nodes[origem]['y']],
-                   c='white', s=200, marker='o',
-                   edgecolors='black', linewidths=2, zorder=10)
-        ax.scatter([G.nodes[destino]['x']], [G.nodes[destino]['y']],
-                   c='white', s=250, marker='*',
-                   edgecolors='black', linewidths=2, zorder=10)
+    # Texto final em cada mapa
+    txt_a.set_text(f"✅ {len(caminho_astar)} nós na rota")
+    txt_d.set_text(f"✅ {len(caminho_dijkstra)} nós na rota")
+    txt_a.set_color(CORES['astar_rota'])
+    txt_d.set_color(CORES['dijkstra_rota'])
+
+    # Redesenha pins por cima de tudo
+    _desenhar_pins()
 
     _atualizar_painel('concluido')
 
-    # Rodapé informativo
-    nota = ("📌 Rotas idênticas — A* foi mais eficiente (menos nós explorados)"
+    # Rodapé
+    nota = ("📌 Rotas idênticas — A* explorou menos nós para chegar ao mesmo resultado"
             if rotas_identicas
-            else "📌 Rotas diferentes — cada algoritmo encontrou um caminho distinto")
-    fig.text(0.5, 0.005, nota, ha='center', color='#aaaaaa', fontsize=10,
-             family='monospace')
+            else "📌 Rotas diferentes — cada algoritmo escolheu um caminho distinto")
+    fig.text(0.5, 0.005, nota, ha='center', color='#aaaaaa',
+             fontsize=10, family='monospace')
 
     print("\n" + "=" * 60)
     print("  RESULTADO FINAL — A* vs DIJKSTRA")
     print("=" * 60)
     print(f"  Rotas idênticas?      {'SIM ✔️' if rotas_identicas else 'NÃO ✖️'}")
-    print(f"  A*       — tempo busca: {tempo_astar:.4f}s | nós: {len(visitados_astar):,}")
-    print(f"  Dijkstra — tempo busca: {tempo_dijkstra:.4f}s | nós: {len(visitados_dijkstra):,}")
-    print(f"  Eficiência A* (nós):  {len(visitados_astar)/max(len(visitados_dijkstra),1)*100:.1f}% do Dijkstra")
-    print(f"  A*       — dist: {stats_astar['distancia_km']:.3f} km | {stats_astar['tempo_min']:.2f} min")
-    print(f"  Dijkstra — dist: {stats_dijkstra['distancia_km']:.3f} km | {stats_dijkstra['tempo_min']:.2f} min")
+    print(f"  A*       — busca: {tempo_astar:.4f}s | explorados: {len(visitados_astar):,} | rota: {len(caminho_astar)} nós")
+    print(f"  Dijkstra — busca: {tempo_dijkstra:.4f}s | explorados: {len(visitados_dijkstra):,} | rota: {len(caminho_dijkstra)} nós")
+    print(f"  Eficiência A* (nós explorados): {len(visitados_astar)/max(len(visitados_dijkstra),1)*100:.1f}% do Dijkstra")
+    print(f"  A*       — {stats_astar['distancia_km']:.3f} km | {stats_astar['tempo_min']:.2f} min")
+    print(f"  Dijkstra — {stats_dijkstra['distancia_km']:.3f} km | {stats_dijkstra['tempo_min']:.2f} min")
     print("=" * 60)
 
     plt.tight_layout(rect=[0, 0.02, 1, 0.97])
